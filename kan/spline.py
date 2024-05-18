@@ -1,6 +1,6 @@
 import torch
 
-def B_batch(x, grid, k=0, extend=True, device=None):
+def B_batch(x, grid, k=0, extend=True, device=None, dtype=torch.float32):
     """
     Evaluate x on B-spline bases.
     
@@ -16,6 +16,8 @@ def B_batch(x, grid, k=0, extend=True, device=None):
             If True, k points are extended on both ends. If False, no extension (zero boundary condition). Default: True
         device : str or torch.device, optional
             Device to perform the computation on.
+        dtype : torch.dtype, optional
+            Data type of tensors. Default: torch.float32
     
     Returns:
     --------
@@ -34,9 +36,9 @@ def B_batch(x, grid, k=0, extend=True, device=None):
     torch.Size([5, 13, 100])
     """
     if device is None:
-        device = torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    x, grid = x.to(device), grid.to(device)
+    x, grid = x.to(device, dtype=dtype), grid.to(device, dtype=dtype)
 
     def extend_grid(grid, k_extend=0):
         h = (grid[:, [-1]] - grid[:, [0]]) / (grid.shape[1] - 1)
@@ -54,12 +56,12 @@ def B_batch(x, grid, k=0, extend=True, device=None):
     if k == 0:
         value = (x >= grid[:, :-1]) * (x < grid[:, 1:])
     else:
-        B_km1 = B_batch(x[:, 0], grid=grid[:, :, 0], k=k - 1, extend=False, device=device)
+        B_km1 = B_batch(x[:, 0], grid=grid[:, :, 0], k=k - 1, extend=False, device=device, dtype=dtype)
         value = (x - grid[:, :-(k + 1)]) / (grid[:, k:-1] - grid[:, :-(k + 1)]) * B_km1[:, :-1] + (grid[:, k + 1:] - x) / (grid[:, k + 1:] - grid[:, 1:(-k)]) * B_km1[:, 1:]
     
     return value
 
-def coef2curve(x_eval, grid, coef, k, device=None):
+def coef2curve(x_eval, grid, coef, k, device=None, dtype=torch.float32):
     """
     Convert B-spline coefficients to B-spline curves. Evaluate x on B-spline curves (summing up B_batch results over B-spline basis).
     
@@ -75,6 +77,8 @@ def coef2curve(x_eval, grid, coef, k, device=None):
             The piecewise polynomial order of splines.
         device : str or torch.device, optional
             Device to perform the computation on.
+        dtype : torch.dtype, optional
+            Data type of tensors. Default: torch.float32.
         
     Returns:
     --------
@@ -89,19 +93,18 @@ def coef2curve(x_eval, grid, coef, k, device=None):
     >>> k = 3
     >>> x_eval = torch.normal(0, 1, size=(num_spline, num_sample))
     >>> grids = torch.einsum('i,j->ij', torch.ones(num_spline,), torch.linspace(-1, 1, steps=num_grid_interval + 1))
-    >>> coef = torch.normal(0, 1, size=(num_spline, numgrid_interval+k))
+    >>> coef = torch.normal(0, 1, size=(num_spline, num_grid_interval+k))
     >>> coef2curve(x_eval, grids, coef, k=k).shape
     torch.Size([5, 100])
     """
     if device is None:
-        device = torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    x_eval, grid, coef = x_eval.to(device), grid.to(device), coef.to(device)
-    y_eval = torch.einsum('ij,ijk->ik', coef, B_batch(x_eval, grid, k, device=device))
+    x_eval, grid, coef = x_eval.to(device, dtype=dtype), grid.to(device, dtype=dtype), coef.to(device, dtype=dtype)
+    y_eval = torch.einsum('ij,ijk->ik', coef, B_batch(x_eval, grid, k, device=device, dtype=dtype))
     return y_eval
 
-
-def curve2coef(x_eval, y_eval, grid, k, device=None):
+def curve2coef(x_eval, y_eval, grid, k, device=None, dtype=torch.float32):
     """
     Convert B-spline curves to B-spline coefficients using least squares.
     
@@ -117,6 +120,13 @@ def curve2coef(x_eval, y_eval, grid, k, device=None):
             The piecewise polynomial order of splines.
         device : str or torch.device, optional
             Device to perform the computation on.
+        dtype : torch.dtype, optional
+            Data type of tensors. Default: torch.float32.
+        
+    Returns:
+    --------
+        coef : 2D torch.tensor
+            Shape (number of splines, number of coef params). number of coef params = number of grid intervals + k
         
     Example
     -------
@@ -131,9 +141,9 @@ def curve2coef(x_eval, y_eval, grid, k, device=None):
     torch.Size([5, 13])
     """
     if device is None:
-        device = torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    x_eval, y_eval, grid = x_eval.to(device), y_eval.to(device), grid.to(device)
-    mat = B_batch(x_eval, grid, k, device=device).permute(0, 2, 1)
+    x_eval, y_eval, grid = x_eval.to(device, dtype=dtype), y_eval.to(device, dtype=dtype), grid.to(device, dtype=dtype)
+    mat = B_batch(x_eval, grid, k, device=device, dtype=dtype).permute(0, 2, 1)
     coef = torch.linalg.lstsq(mat.to('cpu'), y_eval.unsqueeze(dim=2).to('cpu')).solution[:, :, 0]
-    return coef.to(device)
+    return coef.to(device, dtype=dtype)
